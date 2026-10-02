@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Spatial RAG and Text-to-PostGIS Agent for Krakow Transit Data"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "asyncpg>=0.31.0",
+    "greenlet>=3.5.6",
+    "sqlalchemy>=2.0",
+]
 
 [tool.ruff]
 line-length = 88
