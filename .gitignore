@@ -1,0 +1,22 @@
+# Virtual environments and package manager artifacts
+.venv/
+uv.lock.temp
+
+# Byte-compiled / optimized / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Local PostGIS persistent volume data
+postgis_data/
+
+# IDE configurations and OS generated files
+.idea/
+.vscode/
+.DS_Store
+*.swp

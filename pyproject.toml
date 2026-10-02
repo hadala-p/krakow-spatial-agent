@@ -1,0 +1,26 @@
+[project]
+name = "krakow-spatial-agent"
+version = "0.1.0"
+description = "Spatial RAG and Text-to-PostGIS Agent for Krakow Transit Data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (automatic import sorting)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade (Python 3.12+ modern syntax)
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
