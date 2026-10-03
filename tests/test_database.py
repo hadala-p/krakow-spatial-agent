@@ -14,3 +14,11 @@ async def test_postgis_extension_available():
 
     assert postgis_version is not None
     assert "POSTGIS=" in postgis_version
+
+
+@pytest.mark.asyncio
+async def test_invalid_sql_syntax():
+    """Intentional syntax error to verify pipeline blocking behavior."""
+    query = text("SELECT 1 FORM pg_database;")
+    async with engine.connect() as connection:
+        await connection.execute(query)
