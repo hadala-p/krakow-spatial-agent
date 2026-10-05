@@ -1,6 +1,8 @@
 import pytest
 from app.core.database import engine
+from asyncpg.exceptions import PostgresSyntaxError
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 
 @pytest.mark.asyncio
@@ -18,7 +20,10 @@ async def test_postgis_extension_available():
 
 @pytest.mark.asyncio
 async def test_invalid_sql_syntax():
-    """Intentional syntax error to verify pipeline blocking behavior."""
+    """Verify that PostGIS syntax errors are caught and raise DBAPIError."""
     query = text("SELECT 1 FORM pg_database;")
-    async with engine.connect() as connection:
-        await connection.execute(query)
+    with pytest.raises(DBAPIError) as exc_info:
+        async with engine.connect() as connection:
+            await connection.execute(query)
+
+    assert isinstance(exc_info.value.orig, PostgresSyntaxError)
