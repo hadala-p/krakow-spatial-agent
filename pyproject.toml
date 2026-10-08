@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Spatial RAG and Text-to-PostGIS Agent for Krakow Transit Data"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "asyncpg>=0.31.0",
+    "greenlet>=3.5.6",
+    "sqlalchemy>=2.0",
+]
 
 [tool.ruff]
 line-length = 88
@@ -24,3 +28,17 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+testpaths = ["tests"]
+pythonpath = ["backend"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+]
