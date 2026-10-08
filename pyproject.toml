@@ -5,6 +5,7 @@ description = "Spatial RAG and Text-to-PostGIS Agent for Krakow Transit Data"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.0",
     "asyncpg>=0.31.0",
     "geoalchemy2>=0.14",
     "greenlet>=3.5.6",
