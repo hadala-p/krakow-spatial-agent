@@ -40,6 +40,8 @@ pythonpath = ["backend"]
 
 [dependency-groups]
 dev = [
+    "langchain-google-genai>=4.4.2",
+    "langgraph>=1.2.15",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",

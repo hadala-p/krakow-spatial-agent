@@ -21,7 +21,13 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Inject database URL from database.py into alembic configuration
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
+
+
+def include_name(name: str, type_: str, parent_names: dict[str, str]) -> bool:
+    if type_ == "table":
+        return name in target_metadata.tables
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -40,6 +46,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_name=include_name,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -49,7 +56,11 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_name=include_name,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
