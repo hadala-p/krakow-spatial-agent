@@ -3,10 +3,13 @@ import io
 import tempfile
 import zipfile
 
+import geopandas as gpd
 import httpx
+import pandas as pd
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from shapely.geometry import LineString
 
 from app.core.database import (
     POSTGRES_DB,
@@ -38,6 +41,44 @@ IMPORT_ORDER = (
     "stop_times",
 )
 REQUIRED_TABLES = {"agency", "routes", "stops", "trips", "stop_times"}
+
+
+def standardize_time_series(series: pd.Series) -> pd.Series:
+    """Wrap GTFS hour values at 24 while preserving missing and invalid values."""
+
+    def normalize(value: object) -> object:
+        if pd.isna(value):
+            return value
+
+        parts = str(value).strip().split(":")
+        if len(parts) != 3:
+            return value
+
+        try:
+            hours, minutes, seconds = map(int, parts)
+        except ValueError:
+            return value
+
+        if hours < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
+            return value
+        return f"{hours % 24:02d}:{minutes:02d}:{seconds:02d}"
+
+    return series.map(normalize)
+
+
+def build_route_shapes_geodataframe(df_shapes: pd.DataFrame) -> gpd.GeoDataFrame:
+    """Build WGS84 LineStrings from ordered GTFS shape points."""
+    sorted_points = df_shapes.sort_values(["shape_id", "shape_pt_sequence"])
+    geometries = [
+        {
+            "shape_id": shape_id,
+            "geom": LineString(
+                zip(group["shape_pt_lon"], group["shape_pt_lat"], strict=True)
+            ),
+        }
+        for shape_id, group in sorted_points.groupby("shape_id", sort=True)
+    ]
+    return gpd.GeoDataFrame(geometries, geometry="geom", crs="EPSG:4326")
 
 
 def inspect_gtfs_archive(
