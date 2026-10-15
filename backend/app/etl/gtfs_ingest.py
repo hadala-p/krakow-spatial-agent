@@ -1,11 +1,12 @@
+import csv
 import io
+import tempfile
 import zipfile
 
-import geopandas as gpd
 import httpx
-import pandas as pd
-from shapely.geometry import LineString
-from sqlalchemy import create_engine, text
+import psycopg
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from app.core.database import (
     POSTGRES_DB,
@@ -14,209 +15,159 @@ from app.core.database import (
     POSTGRES_PORT,
     POSTGRES_USER,
 )
+from app.models import Base
 
-GTFS_KRK_A_URL = "https://gtfs.ztp.krakow.pl/GTFS_KRK_A.zip"
-
-SYNC_DATABASE_URL = (
-    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
-    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+GTFS_URL = "https://gtfs.ztp.krakow.pl/GTFS_KRK_A.zip"
+DB_CONN = make_conninfo(
+    host=POSTGRES_HOST,
+    port=int(POSTGRES_PORT),
+    dbname=POSTGRES_DB,
+    user=POSTGRES_USER,
+    password=POSTGRES_PASSWORD,
 )
 
-
-def standardize_time_series(series: pd.Series) -> pd.Series:
-    """Normalize GTFS time strings, wrapping hours >= 24 into 00-23."""
-
-    def _normalize(val: str) -> str:
-        if pd.isna(val):
-            return val
-        parts = str(val).strip().split(":")
-        if len(parts) != 3:
-            return val
-        h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
-        h = h % 24
-        return f"{h:02d}:{m:02d}:{s:02d}"
-
-    return series.astype(str).apply(_normalize)
+IMPORT_ORDER = (
+    "agency",
+    "calendar",
+    "calendar_dates",
+    "feed_info",
+    "routes",
+    "shapes",
+    "stops",
+    "trips",
+    "stop_times",
+)
+REQUIRED_TABLES = {"agency", "routes", "stops", "trips", "stop_times"}
 
 
-def build_route_shapes_geodataframe(df_shapes: pd.DataFrame) -> gpd.GeoDataFrame:
-    """Sort shape points by sequence and build valid LineString geometries."""
-    sorted_points = df_shapes.sort_values(["shape_id", "shape_pt_sequence"])
+def inspect_gtfs_archive(
+    archive: zipfile.ZipFile,
+) -> dict[str, tuple[str, list[str]]]:
+    """Validate supported CSV headers against the SQLAlchemy table metadata."""
+    table_files: dict[str, tuple[str, list[str]]] = {}
 
-    geoms = (
-        sorted_points.groupby("shape_id")
-        .apply(
-            lambda group: LineString(
-                zip(group["shape_pt_lon"], group["shape_pt_lat"], strict=False)
+    for filename in archive.namelist():
+        if not filename.lower().endswith(".txt") or filename.startswith("__MACOSX/"):
+            continue
+
+        table_name = filename.rsplit("/", maxsplit=1)[-1][:-4].lower()
+        table = Base.metadata.tables.get(table_name)
+        if table is None:
+            continue
+        if table_name in table_files:
+            raise ValueError(f"GTFS archive contains multiple {table_name}.txt files")
+
+        with archive.open(filename) as file:
+            header_line = file.readline().decode("utf-8-sig")
+        columns = next(csv.reader([header_line]), [])
+        if not columns or any(not column for column in columns):
+            raise ValueError(f"{filename} has an empty or invalid header")
+        if len(columns) != len(set(columns)):
+            raise ValueError(f"{filename} contains duplicate column names")
+
+        unknown_columns = set(columns) - set(table.columns.keys())
+        if unknown_columns:
+            names = ", ".join(sorted(unknown_columns))
+            raise ValueError(
+                f"{filename} contains columns without ORM mappings: {names}"
             )
+
+        missing_required = {
+            column.name
+            for column in table.columns
+            if not column.nullable and column.name not in columns
+        }
+        if missing_required:
+            names = ", ".join(sorted(missing_required))
+            raise ValueError(f"{filename} is missing required columns: {names}")
+
+        table_files[table_name] = (filename, columns)
+
+    missing_tables = REQUIRED_TABLES - table_files.keys()
+    if missing_tables:
+        names = ", ".join(sorted(f"{name}.txt" for name in missing_tables))
+        raise ValueError(f"GTFS archive is missing required files: {names}")
+
+    return table_files
+
+
+def ingest_gtfs_feed(gtfs_zip_bytes: bytes, dsn: str = DB_CONN) -> None:
+    """Bulk-load a GTFS archive into tables defined by the SQLAlchemy models."""
+    with zipfile.ZipFile(io.BytesIO(gtfs_zip_bytes)) as archive:
+        _load_gtfs_archive(archive, dsn)
+
+
+def _load_gtfs_archive(archive: zipfile.ZipFile, dsn: str) -> None:
+    table_files = inspect_gtfs_archive(archive)
+
+    # Replace the complete GTFS snapshot so omitted optional files cannot go stale.
+    tables_to_truncate = set(Base.metadata.tables)
+    truncate_statement = sql.SQL("TRUNCATE TABLE {}").format(
+        sql.SQL(", ").join(
+            sql.Identifier(table_name) for table_name in sorted(tables_to_truncate)
         )
-        .reset_index(name="geom")
     )
 
-    return gpd.GeoDataFrame(geoms, geometry="geom", crs="EPSG:4326")
-
-
-def download_gtfs_archive(url: str = GTFS_KRK_A_URL) -> zipfile.ZipFile:
-    """Fetch GTFS zip archive into an in-memory buffer."""
-    with httpx.Client(timeout=60.0) as client:
-        response = client.get(url)
-        response.raise_for_status()
-        return zipfile.ZipFile(io.BytesIO(response.content))
-
-
-def ingest_gtfs_feed(
-    zip_ref: zipfile.ZipFile, engine_url: str = SYNC_DATABASE_URL
-) -> None:
-    """Transform and idempotently bulk-insert GTFS tables into PostGIS."""
-    engine = create_engine(engine_url)
-
-    # 1. Ingest routes
-    if "routes.txt" in zip_ref.namelist():
-        with zip_ref.open("routes.txt") as f:
-            df_routes = pd.read_csv(f, dtype=str)
-        routes_payload = (
-            df_routes[["route_id", "route_short_name", "route_long_name", "route_type"]]
-            .rename(columns={"route_id": "id"})
-            .to_dict(orient="records")
-        )
-
-        with engine.begin() as conn:
-            stmt = text(
+    with psycopg.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
                 """
-                INSERT INTO routes (id, route_short_name, route_long_name, route_type)
-                VALUES (:id, :route_short_name, :route_long_name, :route_type::integer)
-                ON CONFLICT (id) DO UPDATE SET
-                    route_short_name = EXCLUDED.route_short_name,
-                    route_long_name = EXCLUDED.route_long_name,
-                    route_type = EXCLUDED.route_type;
-                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name = ANY(%s)
+                """,
+                (sorted(tables_to_truncate),),
             )
-            conn.execute(stmt, routes_payload)
-
-    # 2. Ingest stops
-    if "stops.txt" in zip_ref.namelist():
-        with zip_ref.open("stops.txt") as f:
-            df_stops = pd.read_csv(f, dtype=str)
-        df_stops["stop_lat"] = pd.to_numeric(df_stops["stop_lat"])
-        df_stops["stop_lon"] = pd.to_numeric(df_stops["stop_lon"])
-
-        stops_payload = []
-        for _, row in df_stops.iterrows():
-            stops_payload.append(
-                {
-                    "id": str(row["stop_id"]),
-                    "stop_name": str(row["stop_name"]),
-                    "stop_code": str(row.get("stop_code", "")) or None,
-                    "lon": row["stop_lon"],
-                    "lat": row["stop_lat"],
-                }
-            )
-
-        with engine.begin() as conn:
-            stmt = text(
-                """
-                INSERT INTO stops (id, stop_name, stop_code, geom)
-                VALUES (:id,
-                            :stop_name,
-                            :stop_code,
-                            ST_SetSRID(
-                                ST_Point(:lon, :lat),
-                                4326
-                            )
-                        )
-                ON CONFLICT (id) DO UPDATE SET
-                    stop_name = EXCLUDED.stop_name,
-                    stop_code = EXCLUDED.stop_code,
-                    geom = EXCLUDED.geom;
-                """
-            )
-            conn.execute(stmt, stops_payload)
-
-    # 3. Ingest route_shapes
-    if "shapes.txt" in zip_ref.namelist():
-        with zip_ref.open("shapes.txt") as f:
-            df_shapes = pd.read_csv(f)
-        gdf_shapes = build_route_shapes_geodataframe(df_shapes)
-
-        with engine.begin() as conn:
-            conn.execute(text("TRUNCATE TABLE route_shapes RESTART IDENTITY;"))
-            for _, row in gdf_shapes.iterrows():
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO route_shapes (shape_id, geom)
-                        VALUES (:shape_id, ST_SetSRID(ST_GeomFromText(:wkt), 4326));
-                        """
-                    ),
-                    {"shape_id": row["shape_id"], "wkt": row["geom"].wkt},
+            existing_tables = {row[0] for row in cursor.fetchall()}
+            missing_tables = tables_to_truncate - existing_tables
+            if missing_tables:
+                names = ", ".join(sorted(missing_tables))
+                raise RuntimeError(
+                    f"GTFS database tables are missing: {names}. "
+                    "Run `uv run alembic -c backend/alembic.ini upgrade head` "
+                    "and verify that the importer and Alembic use the same "
+                    "database settings."
                 )
 
-    # 4. Ingest trips
-    if "trips.txt" in zip_ref.namelist():
-        with zip_ref.open("trips.txt") as f:
-            df_trips = pd.read_csv(f, dtype=str)
-        trips_payload = (
-            df_trips[
-                ["trip_id", "route_id", "trip_headsign", "direction_id", "shape_id"]
-            ]
-            .rename(columns={"trip_id": "id"})
-            .to_dict(orient="records")
-        )
+            cursor.execute(truncate_statement)
 
-        with engine.begin() as conn:
-            stmt = text(
-                """
-                INSERT INTO trips (id, route_id, trip_headsign, direction_id, shape_id)
-                VALUES (:id,
-                            :route_id,
-                            :trip_headsign,
-                            :direction_id::integer,
-                            :shape_id
-                        )
-                ON CONFLICT (id) DO UPDATE SET
-                    route_id = EXCLUDED.route_id,
-                    trip_headsign = EXCLUDED.trip_headsign,
-                    direction_id = EXCLUDED.direction_id,
-                    shape_id = EXCLUDED.shape_id;
-                """
-            )
-            conn.execute(stmt, trips_payload)
+            for table_name in IMPORT_ORDER:
+                if table_name not in table_files:
+                    continue
 
-    # 5. Ingest stop_times
-    if "stop_times.txt" in zip_ref.namelist():
-        with zip_ref.open("stop_times.txt") as f:
-            df_st = pd.read_csv(f, dtype=str)
-        df_st["arrival_time"] = standardize_time_series(df_st["arrival_time"])
-        df_st["departure_time"] = standardize_time_series(df_st["departure_time"])
+                filename, columns = table_files[table_name]
+                table = Base.metadata.tables[table_name]
+                column_identifiers = sql.SQL(", ").join(
+                    sql.Identifier(column) for column in columns
+                )
+                copy_statement = sql.SQL(
+                    "COPY {} ({}) FROM STDIN WITH (FORMAT CSV, ENCODING 'UTF8')"
+                ).format(sql.Identifier(table.name), column_identifiers)
 
-        st_payload = df_st[
-            ["trip_id", "stop_id", "stop_sequence", "arrival_time", "departure_time"]
-        ].to_dict(orient="records")
+                print(f"--> Importing {filename} into {table.name}...")
+                with archive.open(filename) as file:
+                    file.readline()
+                    with cursor.copy(copy_statement) as copy:
+                        while chunk := file.read(262144):
+                            copy.write(chunk)
 
-        with engine.begin() as conn:
-            conn.execute(text("TRUNCATE TABLE stop_times RESTART IDENTITY;"))
-            stmt = text(
-                """
-                INSERT INTO stop_times (trip_id,
-                                            stop_id,
-                                            stop_sequence,
-                                            arrival_time,
-                                            departure_time
-                                        )
-                VALUES (:trip_id,
-                            :stop_id,
-                            :stop_sequence::integer,
-                            :arrival_time,
-                            :departure_time
-                        );
-                """
-            )
-            conn.execute(stmt, st_payload)
+    print("GTFS files loaded successfully.")
+
+
+def download_and_ingest_gtfs(url: str = GTFS_URL, dsn: str = DB_CONN) -> None:
+    """Download the GTFS archive and load it into the configured database."""
+    with httpx.Client(timeout=60.0) as client:
+        with client.stream("GET", url) as response:
+            response.raise_for_status()
+            with tempfile.TemporaryFile() as archive_file:
+                for chunk in response.iter_bytes(chunk_size=262144):
+                    archive_file.write(chunk)
+                archive_file.seek(0)
+                with zipfile.ZipFile(archive_file) as archive:
+                    _load_gtfs_archive(archive, dsn)
 
 
 if __name__ == "__main__":
-    print("Downloading ZTP Krakow GTFS bus feed...")
-    archive = download_gtfs_archive()
-    print("Ingesting GTFS layers into PostGIS...")
-    ingest_gtfs_feed(archive)
-    print("GTFS ingestion finished successfully.")
+    print(f"Downloading GTFS feed from {GTFS_URL}...")
+    download_and_ingest_gtfs()
