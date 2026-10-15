@@ -1,7 +1,8 @@
 import csv
 import io
-import tempfile
 import zipfile
+from collections.abc import Sequence
+from contextlib import ExitStack
 
 import geopandas as gpd
 import httpx
@@ -20,7 +21,12 @@ from app.core.database import (
 )
 from app.models import Base
 
-GTFS_URL = "https://gtfs.ztp.krakow.pl/GTFS_KRK_A.zip"
+GTFS_URLS = (
+    "https://gtfs.ztp.krakow.pl/GTFS_KRK_A.zip",
+    "https://gtfs.ztp.krakow.pl/GTFS_KRK_M.zip",
+    "https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip",
+)
+GTFS_URL = GTFS_URLS[0]
 DB_CONN = make_conninfo(
     host=POSTGRES_HOST,
     port=int(POSTGRES_PORT),
@@ -37,6 +43,7 @@ IMPORT_ORDER = (
     "routes",
     "shapes",
     "stops",
+    "blocks",
     "trips",
     "stop_times",
 )
@@ -134,14 +141,25 @@ def inspect_gtfs_archive(
 
 def ingest_gtfs_feed(gtfs_zip_bytes: bytes, dsn: str = DB_CONN) -> None:
     """Bulk-load a GTFS archive into tables defined by the SQLAlchemy models."""
-    with zipfile.ZipFile(io.BytesIO(gtfs_zip_bytes)) as archive:
-        _load_gtfs_archive(archive, dsn)
+    ingest_gtfs_feeds((gtfs_zip_bytes,), dsn)
 
 
-def _load_gtfs_archive(archive: zipfile.ZipFile, dsn: str) -> None:
-    table_files = inspect_gtfs_archive(archive)
+def ingest_gtfs_feeds(gtfs_zip_files: Sequence[bytes], dsn: str = DB_CONN) -> None:
+    """Bulk-load multiple archives as one replacement GTFS snapshot."""
+    if not gtfs_zip_files:
+        raise ValueError("At least one GTFS archive is required")
 
-    # Replace the complete GTFS snapshot so omitted optional files cannot go stale.
+    with ExitStack() as stack:
+        archives = [
+            stack.enter_context(zipfile.ZipFile(io.BytesIO(gtfs_zip_bytes)))
+            for gtfs_zip_bytes in gtfs_zip_files
+        ]
+        _load_gtfs_archives(archives, dsn)
+
+
+def _load_gtfs_archives(archives: Sequence[zipfile.ZipFile], dsn: str) -> None:
+    table_files_by_archive = [inspect_gtfs_archive(archive) for archive in archives]
+
     tables_to_truncate = set(Base.metadata.tables)
     truncate_statement = sql.SQL("TRUNCATE TABLE {}").format(
         sql.SQL(", ").join(
@@ -173,42 +191,54 @@ def _load_gtfs_archive(archive: zipfile.ZipFile, dsn: str) -> None:
 
             cursor.execute(truncate_statement)
 
-            for table_name in IMPORT_ORDER:
-                if table_name not in table_files:
-                    continue
+            for archive, table_files in zip(
+                archives, table_files_by_archive, strict=True
+            ):
+                for table_name in IMPORT_ORDER:
+                    if table_name not in table_files:
+                        continue
 
-                filename, columns = table_files[table_name]
-                table = Base.metadata.tables[table_name]
-                column_identifiers = sql.SQL(", ").join(
-                    sql.Identifier(column) for column in columns
-                )
-                copy_statement = sql.SQL(
-                    "COPY {} ({}) FROM STDIN WITH (FORMAT CSV, ENCODING 'UTF8')"
-                ).format(sql.Identifier(table.name), column_identifiers)
+                    filename, columns = table_files[table_name]
+                    table = Base.metadata.tables[table_name]
+                    column_identifiers = sql.SQL(", ").join(
+                        sql.Identifier(column) for column in columns
+                    )
+                    copy_statement = sql.SQL(
+                        "COPY {} ({}) FROM STDIN WITH (FORMAT CSV, ENCODING 'UTF8')"
+                    ).format(sql.Identifier(table.name), column_identifiers)
 
-                print(f"--> Importing {filename} into {table.name}...")
-                with archive.open(filename) as file:
-                    file.readline()
-                    with cursor.copy(copy_statement) as copy:
-                        while chunk := file.read(262144):
-                            copy.write(chunk)
+                    print(f"--> Importing {filename} into {table.name}...")
+                    with archive.open(filename) as file:
+                        file.readline()
+                        with cursor.copy(copy_statement) as copy:
+                            while chunk := file.read(262144):
+                                copy.write(chunk)
 
-    print("GTFS files loaded successfully.")
+    print("GTFS feeds loaded successfully.")
 
 
 def download_and_ingest_gtfs(url: str = GTFS_URL, dsn: str = DB_CONN) -> None:
     """Download the GTFS archive and load it into the configured database."""
+    download_and_ingest_gtfs_feeds((url,), dsn)
+
+
+def download_and_ingest_gtfs_feeds(
+    urls: Sequence[str] = GTFS_URLS, dsn: str = DB_CONN
+) -> None:
+    """Download all configured GTFS archives and load them as one snapshot."""
     with httpx.Client(timeout=60.0) as client:
-        with client.stream("GET", url) as response:
-            response.raise_for_status()
-            with tempfile.TemporaryFile() as archive_file:
+        archive_files = []
+        for url in urls:
+            print(f"Downloading GTFS feed from {url}...")
+            with client.stream("GET", url) as response:
+                response.raise_for_status()
+                archive_file = io.BytesIO()
                 for chunk in response.iter_bytes(chunk_size=262144):
                     archive_file.write(chunk)
-                archive_file.seek(0)
-                with zipfile.ZipFile(archive_file) as archive:
-                    _load_gtfs_archive(archive, dsn)
+                archive_files.append(archive_file.getvalue())
+    ingest_gtfs_feeds(archive_files, dsn)
+    ingest_gtfs_feeds(archive_files, dsn)
 
 
 if __name__ == "__main__":
-    print(f"Downloading GTFS feed from {GTFS_URL}...")
-    download_and_ingest_gtfs()
+    download_and_ingest_gtfs_feeds()

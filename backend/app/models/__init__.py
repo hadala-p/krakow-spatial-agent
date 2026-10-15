@@ -3,6 +3,7 @@
 from app.models.spatial import (
     Agency,
     Base,
+    Block,
     Calendar,
     CalendarDate,
     FeedInfo,
@@ -16,6 +17,7 @@ from app.models.spatial import (
 __all__ = [
     "Agency",
     "Base",
+    "Block",
     "Calendar",
     "CalendarDate",
     "FeedInfo",
