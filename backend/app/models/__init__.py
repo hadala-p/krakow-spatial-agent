@@ -1,5 +1,27 @@
-"""Database declarative models module."""
+"""Database declarative GTFS models."""
 
-from app.models.spatial import Base, Route, RouteShape, Stop, StopTime, Trip
+from app.models.spatial import (
+    Agency,
+    Base,
+    Calendar,
+    CalendarDate,
+    FeedInfo,
+    Route,
+    Shape,
+    Stop,
+    StopTime,
+    Trip,
+)
 
-__all__ = ["Base", "Route", "RouteShape", "Stop", "StopTime", "Trip"]
+__all__ = [
+    "Agency",
+    "Base",
+    "Calendar",
+    "CalendarDate",
+    "FeedInfo",
+    "Route",
+    "Shape",
+    "Stop",
+    "StopTime",
+    "Trip",
+]
