@@ -122,6 +122,15 @@ class Shape(Base):
     shape_dist_traveled: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class Block(Base):
+    """Krakow GTFS block.txt row mapping a block to a shift."""
+
+    __tablename__ = "blocks"
+
+    block_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    shift: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class StopTime(Base):
     """GTFS stop_times.txt row."""
 

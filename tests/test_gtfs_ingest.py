@@ -2,7 +2,11 @@ import io
 import zipfile
 
 import pytest
-from app.etl.gtfs_ingest import ingest_gtfs_feed, inspect_gtfs_archive
+from app.etl.gtfs_ingest import (
+    ingest_gtfs_feed,
+    ingest_gtfs_feeds,
+    inspect_gtfs_archive,
+)
 
 GTFS_FILES = {
     "agency.txt": (
@@ -80,6 +84,16 @@ def test_inspect_gtfs_archive_requires_core_gtfs_files():
             inspect_gtfs_archive(archive)
 
 
+def test_inspect_gtfs_archive_maps_krakow_blocks_file():
+    files = dict(GTFS_FILES)
+    files["blocks.txt"] = "block_id,shift\nblock_1,71-01\n"
+
+    with zipfile.ZipFile(io.BytesIO(make_gtfs_archive(files))) as archive:
+        table_files = inspect_gtfs_archive(archive)
+
+    assert table_files["blocks"] == ("blocks.txt", ["block_id", "shift"])
+
+
 class FakeCopy:
     def __init__(self) -> None:
         self.chunks: list[bytes] = []
@@ -103,6 +117,7 @@ class FakeCursor:
             "calendar",
             "calendar_dates",
             "feed_info",
+            "blocks",
             "routes",
             "shapes",
             "stop_times",
@@ -167,10 +182,11 @@ def test_ingest_uses_mapped_tables_copy_and_dependency_order(monkeypatch):
     assert "CASCADE" not in truncate_statement
     assert {
         name
-        for name in ("agency", "routes", "stops", "trips", "stop_times")
+        for name in ("agency", "blocks", "routes", "stops", "trips", "stop_times")
         if f'"{name}"' in truncate_statement
     } == {
         "agency",
+        "blocks",
         "routes",
         "stops",
         "trips",
@@ -195,6 +211,36 @@ def test_ingest_uses_mapped_tables_copy_and_dependency_order(monkeypatch):
         statement.startswith("COPY ") for statement, _ in connection.fake_cursor.copies
     )
     assert all(copy.chunks for _, copy in connection.fake_cursor.copies)
+
+
+def test_ingest_multiple_feeds_truncates_once_and_loads_blocks(monkeypatch):
+    from app.etl import gtfs_ingest
+
+    connection = FakeConnection()
+    monkeypatch.setattr(gtfs_ingest.psycopg, "connect", lambda _: connection)
+    t_feed_files = dict(GTFS_FILES)
+    t_feed_files["blocks.txt"] = "block_id,shift\nblock_1,71-01\n"
+
+    ingest_gtfs_feeds(
+        (
+            make_gtfs_archive(),
+            make_gtfs_archive(t_feed_files),
+        ),
+        dsn="postgresql://test",
+    )
+
+    statements = connection.fake_cursor.statements
+    assert sum(statement.startswith("TRUNCATE TABLE") for statement in statements) == 1
+    imported_tables = [
+        statement.split('"')[1] for statement, _ in connection.fake_cursor.copies
+    ]
+    assert imported_tables.count("routes") == 2
+    assert imported_tables.count("blocks") == 1
+
+
+def test_ingest_multiple_feeds_rejects_empty_input():
+    with pytest.raises(ValueError, match="At least one GTFS archive"):
+        ingest_gtfs_feeds(())
 
 
 def test_ingest_reports_missing_migrated_tables_before_truncating(monkeypatch):

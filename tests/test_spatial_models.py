@@ -1,6 +1,7 @@
 from app.models import (
     Agency,
     Base,
+    Block,
     Calendar,
     CalendarDate,
     FeedInfo,
@@ -15,6 +16,7 @@ from app.models import (
 def test_orm_contains_only_tables_for_provided_gtfs_files():
     assert set(Base.metadata.tables) == {
         "agency",
+        "blocks",
         "calendar",
         "calendar_dates",
         "feed_info",
@@ -82,6 +84,7 @@ def test_models_match_provided_gtfs_file_columns_exactly():
             "shape_pt_sequence",
             "shape_dist_traveled",
         },
+        Block: {"block_id", "shift"},
         StopTime: {
             "trip_id",
             "arrival_time",
@@ -150,6 +153,7 @@ def test_gtfs_primary_keys_match_record_identifiers():
         "feed_publisher_url",
         "feed_lang",
     ]
+    assert [column.name for column in Block.__table__.primary_key] == ["block_id"]
 
 
 def test_gtfs_relationship_foreign_keys():

@@ -51,6 +51,15 @@ Execute the async verification script to check PostGIS extensions:
 uv run python backend/test_connection.py
 ```
 
+### 5. Import the GTFS feeds
+Apply the latest database migration, then download and import the A, M, and T feeds:
+```bash
+uv run alembic -c backend/alembic.ini upgrade head
+uv run --directory backend python -m app.etl.gtfs_ingest
+```
+The feeds are loaded together as one snapshot. The Krakow-specific `blocks.txt`
+from the T feed is stored in the `blocks` table.
+
 ---
 
 ## 🧪 Code Quality & Formatting
@@ -65,6 +74,19 @@ uv run ruff format --check .
 ```
 
 ---
+
+## Transit API
+Start the FastAPI server from the repository root:
+```bash
+uv run uvicorn app.main:app --app-dir backend --reload
+```
+
+Interactive API documentation is available at `http://localhost:8000/docs`.
+
+The initial transit endpoints are:
+- `GET /api/v1/transit/routes/{route_id}` — route shape as a GeoJSON `Feature`.
+- `GET /api/v1/transit/routes/{route_id}/stops` — ordered stops from a representative trip on the route.
+- `GET /api/v1/transit/stops/{stop_id}/routes` — route lines serving a stop, including trip headsigns.
 
 ## 🏛️ Architecture
 Refer to [ARCHITECTURE.md](ARCHITECTURE.md) for structural diagrams and spatial database schemas.
