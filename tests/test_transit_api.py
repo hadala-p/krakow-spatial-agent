@@ -1,13 +1,6 @@
 import pytest
-from app.core.database import engine
 from app.main import app
 from httpx import ASGITransport, AsyncClient
-
-
-@pytest.fixture(autouse=True)
-async def dispose_db():
-    yield
-    await engine.dispose()
 
 
 @pytest.mark.asyncio

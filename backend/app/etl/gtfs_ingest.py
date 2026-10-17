@@ -12,6 +12,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from shapely.geometry import LineString
 
+from app.core.config import settings
 from app.core.database import (
     POSTGRES_DB,
     POSTGRES_HOST,
@@ -21,11 +22,7 @@ from app.core.database import (
 )
 from app.models import Base
 
-GTFS_URLS = (
-    "https://gtfs.ztp.krakow.pl/GTFS_KRK_A.zip",
-    "https://gtfs.ztp.krakow.pl/GTFS_KRK_M.zip",
-    "https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip",
-)
+GTFS_URLS = settings.GTFS_URLS
 GTFS_URL = GTFS_URLS[0]
 DB_CONN = make_conninfo(
     host=POSTGRES_HOST,
