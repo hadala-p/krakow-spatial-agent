@@ -3,7 +3,19 @@ from app.core.config import Settings
 from pydantic import ValidationError
 
 
-def test_settings_load_env_file(tmp_path) -> None:
+def test_settings_load_env_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in (
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_DB",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "DATABASE_URL",
+        "GTFS_URLS",
+        "APP_ENV",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
     env_file = tmp_path / ".env"
     env_file.write_text(
         "POSTGRES_USER=feed_user\n"
