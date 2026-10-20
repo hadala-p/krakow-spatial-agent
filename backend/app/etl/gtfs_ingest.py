@@ -214,11 +214,6 @@ def _load_gtfs_archives(archives: Sequence[zipfile.ZipFile], dsn: str) -> None:
     print("GTFS feeds loaded successfully.")
 
 
-def download_and_ingest_gtfs(url: str = GTFS_URL, dsn: str = DB_CONN) -> None:
-    """Download the GTFS archive and load it into the configured database."""
-    download_and_ingest_gtfs_feeds((url,), dsn)
-
-
 def download_and_ingest_gtfs_feeds(
     urls: Sequence[str] = GTFS_URLS, dsn: str = DB_CONN
 ) -> None:

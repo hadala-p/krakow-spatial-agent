@@ -21,6 +21,17 @@ def test_settings_load_env_file(tmp_path) -> None:
     assert "secret%40word@" in settings.DATABASE_URL
 
 
+def test_settings_normalize_explicit_database_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql://user:pass@aws-0-eu-central-1.pooler.supabase.com:6543/postgres",
+    )
+
+    assert settings.DATABASE_URL == (
+        "postgresql+asyncpg://user:pass@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+    )
+
+
 def test_settings_reject_invalid_database_port() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, POSTGRES_PORT=70000)
