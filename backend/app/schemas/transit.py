@@ -18,6 +18,15 @@ class RouteGeoJSONFeature(BaseModel):
     properties: dict[str, Any]
 
 
+class RouteListItem(BaseModel):
+    """Transit route list item with metadata."""
+
+    id: str
+    route_short_name: str | None = None
+    route_long_name: str | None = None
+    route_type: int
+
+
 class RouteStopItem(BaseModel):
     """Stop details on a route itinerary."""
 
