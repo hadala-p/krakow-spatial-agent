@@ -39,7 +39,7 @@ async def test_live_feed_robust_route_matching(mock_get):
             route_short_name="139 ", vehicle_type="bus_mpk"
         )
 
-        assert (
-            len(result["features"]) == 1
-        ), "Pojazd nie został dopasowany z powodu formatowania znaków!"
+        assert len(result["features"]) == 1, (
+            "Pojazd nie został dopasowany z powodu formatowania znaków!"
+        )
         assert result["features"][0]["properties"]["vehicle_id"] == "BU123"
