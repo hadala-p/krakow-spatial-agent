@@ -44,7 +44,12 @@ class LiveFeedService:
         self, route_short_name: str | None = None, vehicle_type: str | None = None
     ) -> dict:
         features = []
-        types_to_fetch = list(FEED_URLS.keys()) if not vehicle_type else [vehicle_type]
+        if vehicle_type == "bus":
+            types_to_fetch = ["bus_mpk", "bus_mobilis"]
+        elif vehicle_type:
+            types_to_fetch = [vehicle_type]
+        else:
+            types_to_fetch = list(FEED_URLS.keys())
 
         for v_type in types_to_fetch:
             try:

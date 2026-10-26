@@ -50,7 +50,7 @@ async def test_get_vehicles_geojson_parsing_and_filtering(mock_get):
 
         # Test filtering for '139'
         result = await live_feed_service.get_vehicles_geojson(
-            route_short_name="139", vehicle_type="bus"
+            route_short_name="139", vehicle_type="bus_mpk"
         )
 
         # Assertions
