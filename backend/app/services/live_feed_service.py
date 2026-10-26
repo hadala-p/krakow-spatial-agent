@@ -4,7 +4,8 @@ import httpx
 from google.transit import gtfs_realtime_pb2
 
 FEED_URLS = {
-    "bus": "https://gtfs.ztp.krakow.pl/VehiclePositions_A.pb",
+    "bus_mpk": "https://gtfs.ztp.krakow.pl/VehiclePositions_A.pb",
+    "bus_mobilis": "https://gtfs.ztp.krakow.pl/VehiclePositions_M.pb",
     "tram": "https://gtfs.ztp.krakow.pl/VehiclePositions_T.pb",
 }
 
@@ -43,7 +44,7 @@ class LiveFeedService:
         self, route_short_name: str | None = None, vehicle_type: str | None = None
     ) -> dict:
         features = []
-        types_to_fetch = ["bus", "tram"] if not vehicle_type else [vehicle_type]
+        types_to_fetch = list(FEED_URLS.keys()) if not vehicle_type else [vehicle_type]
 
         for v_type in types_to_fetch:
             try:
@@ -55,8 +56,11 @@ class LiveFeedService:
                     veh = entity.vehicle
                     v_route = veh.trip.route_id if veh.HasField("trip") else ""
 
-                    if route_short_name and route_short_name != v_route:
-                        continue
+                    if route_short_name:
+                        clean_filter = str(route_short_name).strip().upper()
+                        clean_route = str(v_route).strip().upper()
+                        if clean_filter != clean_route:
+                            continue
 
                     feature = {
                         "type": "Feature",
