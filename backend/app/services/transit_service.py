@@ -1,12 +1,13 @@
+import json
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db_session
-from app.models.spatial import Route, Shape, Stop, StopTime, Trip
+from app.models.spatial import Route, Stop, StopTime, Trip
 from app.schemas.transit import (
     DepartingRouteItem,
     GeoJSONGeometry,
@@ -98,8 +99,10 @@ class TransitService:
         res = await self.db.execute(stmt_id)
         return res.scalar_one_or_none()
 
-    async def get_route_geometry(self, route_identifier: str) -> RouteGeoJSONFeature:
-        """Get route geometry as GeoJSON by public number or internal ID."""
+    async def get_route_geometry(
+        self, route_identifier: str, direction_id: int | None = None
+    ) -> RouteGeoJSONFeature:
+        """Get precomputed route geometry as GeoJSON by route and direction."""
         route = await self.get_route_by_identifier(route_identifier)
         if not route:
             raise RouteNotFoundError(
@@ -107,42 +110,58 @@ class TransitService:
                 identifier=route_identifier,
             )
 
-        trip_stmt = (
-            select(Trip.shape_id)
-            .where(Trip.route_id == route.route_id)
-            .where(Trip.shape_id.is_not(None))
-            .order_by(Trip.trip_id)
-            .limit(1)
-        )
-        trip_res = await self.db.execute(trip_stmt)
-        shape_id = trip_res.scalar_one_or_none()
-
-        if not shape_id:
+        if direction_id is None:
+            geometry_stmt = text(
+                """
+                SELECT ST_AsGeoJSON(geom)
+                FROM mv_route_geometries
+                WHERE route_id = :route_id
+                ORDER BY direction_id
+                """
+            )
+            geometry_params = {"route_id": route.route_id}
+        else:
+            geometry_stmt = text(
+                """
+                SELECT ST_AsGeoJSON(geom)
+                FROM mv_route_geometries
+                WHERE route_id = :route_id
+                  AND direction_id = :direction_id
+                ORDER BY direction_id
+                """
+            )
+            geometry_params = {
+                "route_id": route.route_id,
+                "direction_id": direction_id,
+            }
+        geometry_res = await self.db.execute(geometry_stmt, geometry_params)
+        geometries = [json.loads(row[0]) for row in geometry_res.all()]
+        if not geometries:
             raise GeometryNotFoundError(
                 f"No geometry found for route '{route_identifier}'",
                 identifier=route_identifier,
             )
 
-        shape_stmt = (
-            select(Shape.shape_pt_lon, Shape.shape_pt_lat)
-            .where(Shape.shape_id == shape_id)
-            .order_by(Shape.shape_pt_sequence)
-        )
-        shape_res = await self.db.execute(shape_stmt)
-        coordinates = [[longitude, latitude] for longitude, latitude in shape_res.all()]
-
-        if len(coordinates) < 2:
-            raise GeometryNotFoundError(
-                f"No geometry found for route '{route_identifier}'",
-                identifier=route_identifier,
-            )
+        if len(geometries) == 1:
+            geometry = geometries[0]
+        else:
+            coordinates = []
+            for item in geometries:
+                if item["type"] == "LineString":
+                    coordinates.append(item["coordinates"])
+                else:
+                    coordinates.extend(item["coordinates"])
+            geometry = {"type": "MultiLineString", "coordinates": coordinates}
 
         return RouteGeoJSONFeature(
-            geometry=GeoJSONGeometry(type="LineString", coordinates=coordinates),
+            geometry=GeoJSONGeometry(
+                type=geometry["type"], coordinates=geometry["coordinates"]
+            ),
             properties={
                 "route_id": route.route_id,
                 "route_short_name": route.route_short_name,
                 "route_long_name": route.route_long_name,
+                "direction_id": direction_id,
             },
         )
 
