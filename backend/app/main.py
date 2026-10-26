@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from app.api.v1.live import router as live_router
 from app.api.v1.transit import router as transit_router
 from app.core.database import check_db_health
 
@@ -11,6 +12,7 @@ app = FastAPI(
 )
 
 app.include_router(transit_router, prefix="/api/v1")
+app.include_router(live_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"])
