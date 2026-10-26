@@ -211,6 +211,8 @@ def _load_gtfs_archives(archives: Sequence[zipfile.ZipFile], dsn: str) -> None:
                             while chunk := file.read(262144):
                                 copy.write(chunk)
 
+            cursor.execute("REFRESH MATERIALIZED VIEW mv_route_geometries")
+
     print("GTFS feeds loaded successfully.")
 
 

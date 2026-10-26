@@ -84,9 +84,13 @@ uv run uvicorn app.main:app --app-dir backend --reload
 Interactive API documentation is available at `http://localhost:8000/docs`.
 
 The initial transit endpoints are:
-- `GET /api/v1/transit/routes/{route_id}` — route shape as a GeoJSON `Feature`.
+- `GET /api/v1/transit/routes/{route_id}?direction_id=0|1` — precomputed route
+  geometry as a GeoJSON `Feature`; omitting `direction_id` returns both directions.
 - `GET /api/v1/transit/routes/{route_id}/stops` — ordered stops from a representative trip on the route.
 - `GET /api/v1/transit/stops/{stop_id}/routes` — route lines serving a stop, including trip headsigns.
+
+Route geometries are stored in the `mv_route_geometries` materialized view and
+refreshed automatically after each GTFS ingestion.
 
 ## 🏛️ Architecture
 Refer to [ARCHITECTURE.md](ARCHITECTURE.md) for structural diagrams and spatial database schemas.

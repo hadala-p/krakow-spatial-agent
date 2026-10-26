@@ -5,10 +5,10 @@ from app.core.database import async_session_maker
 from app.main import app
 from app.models.spatial import Route, Shape, Stop, StopTime, Trip
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 async def seed_test_transit_data() -> AsyncGenerator[None, None]:
     """Seed isolated test transit entities without colliding with real GTFS feeds."""
     async with async_session_maker() as session:
@@ -24,6 +24,15 @@ async def seed_test_transit_data() -> AsyncGenerator[None, None]:
             service_id="service_test_1",
             trip_headsign="Pętla Testowa",
             shape_id="shape_test_999t",
+            direction_id=0,
+        )
+        reverse_trip = Trip(
+            trip_id="trip_test_999t_reverse",
+            route_id="route_test_999t",
+            service_id="service_test_1",
+            trip_headsign="Dworzec Testowy",
+            shape_id="shape_test_999t_reverse",
+            direction_id=1,
         )
         shape_1 = Shape(
             shape_id="shape_test_999t",
@@ -35,6 +44,18 @@ async def seed_test_transit_data() -> AsyncGenerator[None, None]:
             shape_id="shape_test_999t",
             shape_pt_lat=50.062,
             shape_pt_lon=19.938,
+            shape_pt_sequence=2,
+        )
+        reverse_shape_1 = Shape(
+            shape_id="shape_test_999t_reverse",
+            shape_pt_lat=50.062,
+            shape_pt_lon=19.938,
+            shape_pt_sequence=1,
+        )
+        reverse_shape_2 = Shape(
+            shape_id="shape_test_999t_reverse",
+            shape_pt_lat=50.061,
+            shape_pt_lon=19.937,
             shape_pt_sequence=2,
         )
         stop = Stop(
@@ -51,20 +72,43 @@ async def seed_test_transit_data() -> AsyncGenerator[None, None]:
             departure_time="08:00:00",
         )
 
-        for obj in (r_test, trip, shape_1, shape_2, stop, stop_time):
+        for obj in (
+            r_test,
+            trip,
+            reverse_trip,
+            shape_1,
+            shape_2,
+            reverse_shape_1,
+            reverse_shape_2,
+            stop,
+            stop_time,
+        ):
             await session.merge(obj)
+        await session.commit()
+        await session.execute(text("REFRESH MATERIALIZED VIEW mv_route_geometries"))
         await session.commit()
 
     yield
 
     async with async_session_maker() as session:
         await session.execute(
+            delete(StopTime).where(StopTime.trip_id == "trip_test_999t_reverse")
+        )
+        await session.execute(
             delete(StopTime).where(StopTime.trip_id == "trip_test_999t")
         )
+        await session.execute(
+            delete(Trip).where(Trip.trip_id == "trip_test_999t_reverse")
+        )
         await session.execute(delete(Trip).where(Trip.trip_id == "trip_test_999t"))
+        await session.execute(
+            delete(Shape).where(Shape.shape_id == "shape_test_999t_reverse")
+        )
         await session.execute(delete(Shape).where(Shape.shape_id == "shape_test_999t"))
         await session.execute(delete(Stop).where(Stop.stop_id == "stop_test_999t"))
         await session.execute(delete(Route).where(Route.route_id == "route_test_999t"))
+        await session.commit()
+        await session.execute(text("REFRESH MATERIALIZED VIEW mv_route_geometries"))
         await session.commit()
 
 
@@ -92,12 +136,13 @@ async def test_get_route_geometry_by_public_number_and_id_fallback() -> None:
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         # 1. Wyszukanie po publicznym numerze linii ("999T")
-        res_public = await client.get("/api/v1/transit/routes/999T")
+        res_public = await client.get("/api/v1/transit/routes/999T?direction_id=0")
         assert res_public.status_code == 200
         data_public = res_public.json()
         assert data_public["type"] == "Feature"
         assert data_public["properties"]["route_id"] == "route_test_999t"
         assert data_public["properties"]["route_short_name"] == "999T"
+        assert data_public["properties"]["direction_id"] == 0
         assert data_public["geometry"]["type"] == "LineString"
         assert data_public["geometry"]["coordinates"] == [
             [19.937, 50.061],
@@ -105,9 +150,31 @@ async def test_get_route_geometry_by_public_number_and_id_fallback() -> None:
         ]
 
         # 2. Fallback po technicznym route_id ("route_test_999t")
-        res_id = await client.get("/api/v1/transit/routes/route_test_999t")
+        res_id = await client.get(
+            "/api/v1/transit/routes/route_test_999t?direction_id=1"
+        )
         assert res_id.status_code == 200
-        assert res_id.json()["properties"]["route_id"] == "route_test_999t"
+        data_id = res_id.json()
+        assert data_id["properties"]["route_id"] == "route_test_999t"
+        assert data_id["properties"]["direction_id"] == 1
+        assert data_id["geometry"]["coordinates"] == [
+            [19.938, 50.062],
+            [19.937, 50.061],
+        ]
+
+        res_both = await client.get("/api/v1/transit/routes/999T")
+        assert res_both.status_code == 200
+        both_geometry = res_both.json()["geometry"]
+        assert both_geometry["type"] == "MultiLineString"
+        assert both_geometry["coordinates"] == [
+            [[19.937, 50.061], [19.938, 50.062]],
+            [[19.938, 50.062], [19.937, 50.061]],
+        ]
+
+        invalid_direction = await client.get(
+            "/api/v1/transit/routes/999T?direction_id=2"
+        )
+        assert invalid_direction.status_code == 422
 
 
 @pytest.mark.asyncio

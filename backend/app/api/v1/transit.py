@@ -11,7 +11,7 @@ from app.services.transit_service import (
     TransitServiceError,
     get_transit_service,
 )
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 router = APIRouter(prefix="/transit", tags=["Transit"])
 
@@ -28,10 +28,11 @@ async def list_routes(
 async def get_route_geometry(
     route_identifier: str,
     service: Annotated[TransitService, Depends(get_transit_service)],
+    direction_id: Annotated[int | None, Query(ge=0, le=1)] = None,
 ) -> RouteGeoJSONFeature:
-    """Get route LineString geometry as GeoJSON by public number or internal ID."""
+    """Get route geometry as GeoJSON, optionally filtered by direction."""
     try:
-        return await service.get_route_geometry(route_identifier)
+        return await service.get_route_geometry(route_identifier, direction_id)
     except TransitServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

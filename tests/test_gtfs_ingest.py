@@ -176,10 +176,14 @@ def test_ingest_uses_mapped_tables_copy_and_dependency_order(monkeypatch):
 
     ingest_gtfs_feed(make_gtfs_archive(), dsn="postgresql://test")
 
-    assert len(connection.fake_cursor.statements) == 2
+    assert len(connection.fake_cursor.statements) == 3
     truncate_statement = connection.fake_cursor.statements[1]
     assert truncate_statement.startswith("TRUNCATE TABLE")
     assert "CASCADE" not in truncate_statement
+    assert (
+        connection.fake_cursor.statements[2]
+        == "REFRESH MATERIALIZED VIEW mv_route_geometries"
+    )
     assert {
         name
         for name in ("agency", "blocks", "routes", "stops", "trips", "stop_times")
@@ -231,6 +235,14 @@ def test_ingest_multiple_feeds_truncates_once_and_loads_blocks(monkeypatch):
 
     statements = connection.fake_cursor.statements
     assert sum(statement.startswith("TRUNCATE TABLE") for statement in statements) == 1
+    assert statements[-1] == "REFRESH MATERIALIZED VIEW mv_route_geometries"
+    assert (
+        sum(
+            statement.startswith("REFRESH MATERIALIZED VIEW")
+            for statement in statements
+        )
+        == 1
+    )
     imported_tables = [
         statement.split('"')[1] for statement, _ in connection.fake_cursor.copies
     ]
