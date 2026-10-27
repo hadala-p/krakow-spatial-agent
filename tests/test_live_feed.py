@@ -1,8 +1,10 @@
+import asyncio
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from app.main import app
-from app.services.live_feed_service import live_feed_service
+from app.services.live_feed_service import LiveFeedService
 from httpx import ASGITransport, AsyncClient
 
 
@@ -25,6 +27,7 @@ async def test_get_vehicles_geojson_parsing_and_filtering(mock_get):
     with patch(
         "app.services.live_feed_service.gtfs_realtime_pb2.FeedMessage"
     ) as mock_feed_class:
+        service = LiveFeedService()
         mock_feed = MagicMock()
 
         # Fake Bus 139
@@ -48,8 +51,10 @@ async def test_get_vehicles_geojson_parsing_and_filtering(mock_get):
         mock_feed.entity = [entity1, entity2]
         mock_feed_class.return_value = mock_feed
 
+        await service.fetch_feed("bus_mpk")
+
         # Test filtering for '139'
-        result = await live_feed_service.get_vehicles_geojson(
+        result = await service.get_vehicles_geojson(
             route_short_name="139", vehicle_type="bus_mpk"
         )
 
@@ -80,3 +85,54 @@ async def test_live_api_endpoint():
         assert response.status_code == 200
         assert response.json() == {"type": "FeatureCollection", "features": []}
         mock_service.assert_called_once_with(route_short_name="139", vehicle_type=None)
+
+
+@pytest.mark.asyncio
+async def test_all_vehicle_feeds_are_fetched_concurrently():
+    service = LiveFeedService()
+    all_feeds_started = asyncio.Event()
+    started_count = 0
+    feed = MagicMock(entity=[])
+
+    async def fake_fetch_feed(*args: object, **kwargs: object):
+        nonlocal started_count
+        started_count += 1
+        if started_count == 3:
+            all_feeds_started.set()
+        await asyncio.wait_for(all_feeds_started.wait(), timeout=1)
+        return feed
+
+    with patch.object(service, "fetch_feed", side_effect=fake_fetch_feed) as fetch:
+        await asyncio.wait_for(service.refresh_feeds(), timeout=2)
+
+    assert fetch.await_count == 3
+    assert all(call.kwargs["force_refresh"] for call in fetch.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_geojson_uses_cached_snapshot_without_fetching_feeds():
+    service = LiveFeedService()
+    service._cache["tram"] = MagicMock(entity=[])
+
+    with patch.object(service, "fetch_feed") as fetch:
+        result = await service.get_vehicles_geojson(vehicle_type="tram")
+
+    assert result == {"type": "FeatureCollection", "features": []}
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_preserves_last_successful_feed():
+    service = LiveFeedService()
+    stale_feed = MagicMock(entity=[])
+
+    async def fake_fetch_feed(vehicle_type: str, **kwargs: object):
+        if vehicle_type == "bus_mpk":
+            raise httpx.TimeoutException("feed timed out")
+        return MagicMock(entity=[])
+
+    service._cache["bus_mpk"] = stale_feed
+    with patch.object(service, "fetch_feed", side_effect=fake_fetch_feed):
+        await service.refresh_feeds()
+
+    assert service._cache["bus_mpk"] is stale_feed

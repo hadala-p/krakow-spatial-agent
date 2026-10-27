@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.services.live_feed_service import live_feed_service
+from app.services.live_feed_service import LiveFeedService
 
 
 @pytest.fixture
@@ -21,6 +21,7 @@ async def test_live_feed_robust_route_matching(mock_get):
     with patch(
         "app.services.live_feed_service.gtfs_realtime_pb2.FeedMessage"
     ) as mock_feed_class:
+        service = LiveFeedService()
         mock_feed = MagicMock()
 
         # Symulacja czystego rekordu z API GTFS-RT (ZTP)
@@ -34,8 +35,10 @@ async def test_live_feed_robust_route_matching(mock_get):
         mock_feed.entity = [entity]
         mock_feed_class.return_value = mock_feed
 
+        await service.fetch_feed("bus_mpk")
+
         # Symulujemy żądanie ze spacja na końcu (częsty przypadek z bazy)
-        result = await live_feed_service.get_vehicles_geojson(
+        result = await service.get_vehicles_geojson(
             route_short_name="139 ", vehicle_type="bus_mpk"
         )
 

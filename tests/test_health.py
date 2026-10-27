@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,10 +20,12 @@ from sqlalchemy.exc import SQLAlchemyError
 @pytest.mark.asyncio
 async def test_health_check(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     database_is_healthy: bool,
     expected_status: int,
     expected_body: dict[str, str],
 ) -> None:
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     check_db_health = AsyncMock(return_value=database_is_healthy)
     monkeypatch.setattr("app.main.check_db_health", check_db_health)
 
@@ -33,6 +36,11 @@ async def test_health_check(
 
     assert response.status_code == expected_status
     assert response.json() == expected_body
+    assert float(response.headers["X-Response-Time-ms"]) >= 0
+    assert any(
+        f"HTTP GET /health -> {expected_status} in " in record.message
+        for record in caplog.records
+    )
     check_db_health.assert_awaited_once()
 
 

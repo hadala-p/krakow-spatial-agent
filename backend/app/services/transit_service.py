@@ -4,7 +4,6 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db_session
 from app.models.spatial import Route, Stop, StopTime, Trip
@@ -166,41 +165,33 @@ class TransitService:
         )
 
     async def get_route_stops(self, route_identifier: str) -> list[RouteStopItem]:
-        """Get ordered stops for a route by public number or internal ID."""
-        route = await self.get_route_by_identifier(route_identifier)
-        if not route:
+        """Get the representative trip's ordered stops in one database call."""
+        result = await self.db.execute(
+            text("SELECT * FROM get_route_stops_by_identifier(:identifier)"),
+            {"identifier": route_identifier},
+        )
+        rows = result.all()
+        if not rows[0].route_exists:
             raise RouteNotFoundError(
                 f"Route '{route_identifier}' not found",
                 identifier=route_identifier,
             )
 
-        stmt = (
-            select(Trip)
-            .where(Trip.route_id == route.route_id)
-            .order_by(Trip.trip_id)
-            .options(selectinload(Trip.stop_times).selectinload(StopTime.stop))
-            .limit(1)
-        )
-        res = await self.db.execute(stmt)
-        trip = res.scalar_one_or_none()
-
-        if not trip or not trip.stop_times:
+        if not rows[0].has_stops:
             raise StopsNotFoundError(
                 f"No stops found for route '{route_identifier}'",
                 identifier=route_identifier,
             )
 
-        sorted_stop_times = sorted(trip.stop_times, key=lambda st: st.stop_sequence)
-
         return [
             RouteStopItem(
-                stop_id=st.stop.stop_id,
-                stop_name=st.stop.stop_name,
-                stop_sequence=st.stop_sequence,
-                lat=st.stop.stop_lat,
-                lon=st.stop.stop_lon,
+                stop_id=row.stop_id,
+                stop_name=row.stop_name,
+                stop_sequence=row.stop_sequence,
+                lat=row.stop_lat,
+                lon=row.stop_lon,
             )
-            for st in sorted_stop_times
+            for row in rows
         ]
 
     async def get_stop_routes(self, stop_id: str) -> StopRoutesResponse:
